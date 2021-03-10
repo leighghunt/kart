@@ -23,6 +23,7 @@ from . import (
     merge,
     meta,
     pull,
+    reparent,
     resolve,
     show,
     status,
@@ -194,6 +195,7 @@ cli.add_command(merge.merge)
 cli.add_command(meta.commit_files)
 cli.add_command(meta.meta)
 cli.add_command(pull.pull)
+cli.add_command(reparent.reparent_commit)
 cli.add_command(resolve.resolve)
 cli.add_command(show.create_patch)
 cli.add_command(show.show)
