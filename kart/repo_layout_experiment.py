@@ -31,6 +31,10 @@ ALL_STRATEGIES = (
     "three_layer_nonhashed_x256",
     "two_layer_nonhashed_x64",
     "three_layer_nonhashed_x64",
+    "four_layer_nonhashed_x64",
+    "three_layer_nonhashed_x32",
+    "four_layer_nonhashed_x32",
+    "five_layer_nonhashed_x32",
 )
 
 
@@ -240,6 +244,34 @@ def three_layer_nonhashed_x64(pk):
     return f"mydatasetname/.sno-dataset/{(pk%16777216)//262144}/{pk//4096}/{pk//64}/{pk%64}"
 
 
+def four_layer_nonhashed_x64(pk):
+    """
+    Don't hash the PK at all, use it as it is, with a branchingfactor=64 and depth=4
+    """
+    return f"mydatasetname/.sno-dataset/{(pk%1073741824)//16777216}/{pk//262144}/{pk//4096}/{pk//64}/{pk%64}"
+
+
+def three_layer_nonhashed_x32(pk):
+    """
+    Don't hash the PK at all, use it as it is, with a branchingfactor=32 and depth=3
+    """
+    return f"mydatasetname/.sno-dataset/{(pk%1048576)//32768}/{(pk%32768)//1024}/{(pk%1024)//32}/{pk%32}"
+
+
+def four_layer_nonhashed_x32(pk):
+    """
+    Don't hash the PK at all, use it as it is, with a branchingfactor=32 and depth=4
+    """
+    return f"mydatasetname/.sno-dataset/{(pk%33554432)//1048576}/{(pk%1048576)//32768}/{(pk%32768)//1024}/{(pk%1024)//32}/{pk%32}"
+
+
+def five_layer_nonhashed_x32(pk):
+    """
+    Don't hash the PK at all, use it as it is, with a branchingfactor=32 and depth=5
+    """
+    return f"mydatasetname/.sno-dataset/{(pk%1073741824)//33554432}/{(pk%33554432)//1048576}/{(pk%1048576)//32768}/{(pk%32768)//1024}/{(pk%1024)//32}/{pk%32}"
+
+
 @click.command(name="generate-layouts")
 @click.pass_context
 @click.argument(
@@ -253,10 +285,11 @@ def generate_layouts(ctx, *, output_dir, **kwargs):
     for feature_path_strategy in ALL_STRATEGIES:
         feature_path_generator = globals()[feature_path_strategy]
         for n_features in (
-            5000,
-            50000,
-            500000,
-            5_000000,
+            5_000,
+            50_000,
+            500_000,
+            5_000_000,
+            # 25_000_000,
             # 50_000000,
             # 500_000000,
         ):
@@ -331,7 +364,8 @@ def inspect_repos(ctx, *, repos, **kwargs):
         actual_branching_factor = len(list(ds_tree))
         assert actual_branching_factor <= branching_factor, actual_branching_factor
 
-        num_levels = 2 if "two_layer" in name else 3
+        num_levels = re.search(r"(.*)_layer_", name).group(1)
+        num_levels = ["zero", "one", "two", "three", "four", "five"].index(num_levels)
         num_trees = 0
         num_blobs = 0
         total_tree_size = 0
