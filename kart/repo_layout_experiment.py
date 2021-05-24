@@ -312,6 +312,7 @@ def inspect_repos(ctx, *, repos, **kwargs):
             "test name",
             "hashed?",
             "branching factor",
+            "tree levels",
             "number of blobs",
             "number of trees",
             "total size of trees (GB)",
@@ -330,6 +331,7 @@ def inspect_repos(ctx, *, repos, **kwargs):
         actual_branching_factor = len(list(ds_tree))
         assert actual_branching_factor <= branching_factor, actual_branching_factor
 
+        num_levels = 2 if "two_layer" in name else 3
         num_trees = 0
         num_blobs = 0
         total_tree_size = 0
@@ -371,6 +373,7 @@ def inspect_repos(ctx, *, repos, **kwargs):
                 name,
                 is_hashed,
                 branching_factor,
+                num_levels,
                 num_blobs,
                 num_trees,
                 # all in GB
