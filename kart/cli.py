@@ -34,6 +34,7 @@ MODULE_COMMANDS = {
     "merge": {"merge"},
     "meta": {"commit-files", "meta"},
     "pull": {"pull"},
+    "repo_layout_experiment": {"generate-layouts", "inspect-repos"},
     "resolve": {"resolve"},
     "show": {"create-patch", "show"},
     "status": {"status"},
