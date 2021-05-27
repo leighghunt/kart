@@ -202,53 +202,138 @@ def three_layer_b64_hashed_x64(pk):
     )
 
 
+def four_layer_b64_hashed_x64(pk):
+    """
+    Almost the current sno/kart path encoding, but:
+    * add two more tree levels
+    * use branching factor 64 instead of 256
+    """
+    packed_pk = msg_pack((pk,))
+    pk_hash = hexhash(packed_pk)
+    filename = b64encode_str(packed_pk)
+
+    return (
+        f"mydatasetname/.sno-dataset/"
+        f"{_branching_factor_64(pk_hash[:2])}/"
+        f"{_branching_factor_64(pk_hash[2:4])}/"
+        f"{_branching_factor_64(pk_hash[4:6])}/"
+        f"{_branching_factor_64(pk_hash[6:8])}/{filename}"
+    )
+
+
+def _branching_factor_32(two_hex_bytes):
+    i = int(two_hex_bytes, 16)
+    return f"{i % 32:02x}"
+
+
+def three_layer_b64_hashed_x32(pk):
+    """
+    Almost the current sno/kart path encoding, but:
+    * add another tree level
+    * use branching factor 32 instead of 256
+    """
+    packed_pk = msg_pack((pk,))
+    pk_hash = hexhash(packed_pk)
+    filename = b64encode_str(packed_pk)
+
+    return (
+        f"mydatasetname/.sno-dataset/"
+        f"{_branching_factor_32(pk_hash[:2])}/"
+        f"{_branching_factor_32(pk_hash[2:4])}/"
+        f"{_branching_factor_32(pk_hash[4:6])}/{filename}"
+    )
+
+
+def four_layer_b64_hashed_x32(pk):
+    """
+    Almost the current sno/kart path encoding, but:
+    * add two more tree levels
+    * use branching factor 32 instead of 256
+    """
+    packed_pk = msg_pack((pk,))
+    pk_hash = hexhash(packed_pk)
+    filename = b64encode_str(packed_pk)
+
+    return (
+        f"mydatasetname/.sno-dataset/"
+        f"{_branching_factor_32(pk_hash[:2])}/"
+        f"{_branching_factor_32(pk_hash[2:4])}/"
+        f"{_branching_factor_32(pk_hash[4:6])}/"
+        f"{_branching_factor_32(pk_hash[6:8])}/{filename}"
+    )
+
+
+def five_layer_b64_hashed_x32(pk):
+    """
+    Almost the current sno/kart path encoding, but:
+    * add 3 more tree levels
+    * use branching factor 32 instead of 256
+    """
+    packed_pk = msg_pack((pk,))
+    pk_hash = hexhash(packed_pk)
+    filename = b64encode_str(packed_pk)
+
+    return (
+        f"mydatasetname/.sno-dataset/"
+        f"{_branching_factor_32(pk_hash[:2])}/"
+        f"{_branching_factor_32(pk_hash[2:4])}/"
+        f"{_branching_factor_32(pk_hash[4:6])}/"
+        f"{_branching_factor_32(pk_hash[6:8])}/"
+        f"{_branching_factor_32(pk_hash[8:10])}/{filename}"
+    )
+
+
 def two_layer_nonhashed_x256(pk):
     """
     Don't hash the PK at all, use it as it is, with a branchingfactor=256 and depth=2
     """
-    return f"mydatasetname/.sno-dataset/{(pk%16777216)//65536}/{pk//256}/{pk%256}"
+    return (
+        f"mydatasetname/.sno-dataset/{(pk%16777216)//65536}/{(pk%65536)//256}/{pk%256}"
+    )
 
 
 def three_layer_nonhashed_x256(pk):
     """
     Don't hash the PK at all, use it as it is, with a branchingfactor=256 and depth=3
     """
-    return f"mydatasetname/.sno-dataset/{(pk%4294967296)//16777216}/{pk//65536}/{pk//256}/{pk%256}"
+    return f"mydatasetname/.sno-dataset/{(pk%4294967296)//16777216}/{(pk%16777216)//65536}/{(pk%65536)//256}/{pk%256}"
 
 
 def two_layer_nonhashed_x128(pk):
     """
     Don't hash the PK at all, use it as it is, with a branchingfactor=128 and depth=2
     """
-    return f"mydatasetname/.sno-dataset/{(pk%2097152)//16384}/{pk//128}/{pk%128}"
+    return (
+        f"mydatasetname/.sno-dataset/{(pk%2097152)//16384}/{(pk%16384)//128}/{pk%128}"
+    )
 
 
 def three_layer_nonhashed_x128(pk):
     """
     Don't hash the PK at all, use it as it is, with a branchingfactor=128 and depth=3
     """
-    return f"mydatasetname/.sno-dataset/{(pk%268435456)//2097152}/{pk//16384}/{pk//128}/{pk%128}"
+    return f"mydatasetname/.sno-dataset/{(pk%268435456)//2097152}/{(pk%2097152)//16384}/{(pk%16384)//128}/{pk%128}"
 
 
 def two_layer_nonhashed_x64(pk):
     """
     Don't hash the PK at all, use it as it is, with a branchingfactor=64 and depth=2
     """
-    return f"mydatasetname/.sno-dataset/{(pk%262144)//4096}/{pk//64}/{pk%64}"
+    return f"mydatasetname/.sno-dataset/{(pk%262144)//4096}/{(pk%4096)//64}/{pk%64}"
 
 
 def three_layer_nonhashed_x64(pk):
     """
     Don't hash the PK at all, use it as it is, with a branchingfactor=64 and depth=3
     """
-    return f"mydatasetname/.sno-dataset/{(pk%16777216)//262144}/{pk//4096}/{pk//64}/{pk%64}"
+    return f"mydatasetname/.sno-dataset/{(pk%16777216)//262144}/{(pk%262144)//4096}/{(pk%4096)//64}/{pk%64}"
 
 
 def four_layer_nonhashed_x64(pk):
     """
     Don't hash the PK at all, use it as it is, with a branchingfactor=64 and depth=4
     """
-    return f"mydatasetname/.sno-dataset/{(pk%1073741824)//16777216}/{pk//262144}/{pk//4096}/{pk//64}/{pk%64}"
+    return f"mydatasetname/.sno-dataset/{(pk%1073741824)//16777216}/{(pk%16777216)//262144}/{(pk%262144)//4096}/{(pk%4096)//64}/{pk%64}"
 
 
 def three_layer_nonhashed_x32(pk):
@@ -351,6 +436,7 @@ def inspect_repos(ctx, *, repos, **kwargs):
             "total size of trees (GB)",
             "total repo size (GB)",
             "compressed repo size (GB)",
+            "total size of compressed trees (GB)",
         )
     )
     # sort by numfeatures
@@ -369,6 +455,7 @@ def inspect_repos(ctx, *, repos, **kwargs):
         num_trees = 0
         num_blobs = 0
         total_tree_size = 0
+        total_compressed_tree_size = 0
         uncompressed_repo_size = 0
         all_object_types = subprocess.check_output(
             [
@@ -376,7 +463,7 @@ def inspect_repos(ctx, *, repos, **kwargs):
                 "-C",
                 str(path),
                 "cat-file",
-                "--batch-check=%(objecttype) %(objectsize)",
+                "--batch-check=%(objecttype) %(objectsize) %(objectsize:disk)",
                 "--batch-all-objects",
                 "--unordered",
             ],
@@ -384,12 +471,13 @@ def inspect_repos(ctx, *, repos, **kwargs):
             env=tool_environment(),
         ).splitlines()
         for line in all_object_types:
-            typ, size = line.strip().split()
+            typ, size, size_compressed = line.strip().split()
             size = int(size)
+            size_compressed = int(size_compressed)
             if typ == "tree":
                 num_trees += 1
                 total_tree_size += size
-
+                total_compressed_tree_size += size_compressed
             elif typ == "blob":
                 num_blobs += 1
             uncompressed_repo_size += size
@@ -414,5 +502,6 @@ def inspect_repos(ctx, *, repos, **kwargs):
                 total_tree_size / 1_000_000_000.0,
                 uncompressed_repo_size / 1_000_000_000.0,
                 compressed_repo_size / 1_000_000_000.0,
+                total_compressed_tree_size / 1_000_000_000.0,
             )
         )
