@@ -17,3 +17,9 @@ brew "curl"
 brew "sqlite3"
 
 brew "unixodbc"
+
+# s2geometry dependencies
+brew "googletest"
+brew "glog"
+brew "gflags"
+brew "swig"

@@ -222,13 +222,22 @@ class Dataset3(RichBaseDataset):
         raw_dict = self.get_raw_feature_dict(pk_values=pk_values, path=path, data=data)
         return self.schema.feature_from_raw_dict(raw_dict)
 
-    def feature_blobs(self):
+    def feature_blobs(self, skip_promisor=False):
         """
         Returns a generator that yields every feature blob in turn.
         """
         if self.FEATURE_PATH not in self.inner_tree:
             return
-        yield from find_blobs_in_tree(self.inner_tree / self.FEATURE_PATH)
+        blob_gen = find_blobs_in_tree(self.inner_tree / self.FEATURE_PATH)
+        if skip_promisor:
+            for entry in blob_gen:
+                try:
+                    entry.size  # force resolving from ODB
+                except pygit2.ObjectMissingError:
+                    continue
+                yield entry
+        else:
+            yield from blob_gen
 
     @property
     @functools.lru_cache(maxsize=1)

@@ -35,7 +35,7 @@ class RichBaseDataset(BaseDataset):
     RTREE_INDEX_EXTENSIONS = ("kart-idxd", "kart-idxi")
 
     def features_plus_blobs(self):
-        for blob in self.feature_blobs():
+        for blob in self.feature_blobs(skip_promisor=True):
             yield self.get_feature(path=blob.name, data=memoryview(blob)), blob
 
     def features_with_crs_ids(
