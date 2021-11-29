@@ -10,6 +10,62 @@ SKIP_REASON = "s2_py is not yet included in the kart windows build"
 
 
 @pytest.mark.skipif(is_windows, reason=SKIP_REASON)
+def test_isolated():
+    w, s, e, n = (174.7864396833, -41.2521621333, 174.7938725833, -41.2476486833)
+    import s2_py as s2
+
+    s2_indexer = s2.S2RegionTermIndexer()
+    s2_indexer.set_min_level(4)
+    s2_indexer.set_max_level(16)
+    s2_indexer.set_level_mod(1)
+    s2_indexer.set_max_cells(8)
+
+    s2_ll = []
+    s2_ll.append(s2.S2LatLng.FromDegrees(s, w).Normalized())
+    s2_ll.append(s2.S2LatLng.FromDegrees(n, e).Normalized())
+    s2_llrect = s2.S2LatLngRect.FromPointPair(*s2_ll)
+    query_terms = s2_indexer.GetIndexTerms(s2_llrect, "")
+
+    def key(term):
+        out = ""
+        if term[0] == "$":
+            out = "$"
+            term = term[1:]
+        b = bin(int(term, 16))
+        return str(len(b)) + b + out
+
+    assert sorted(query_terms, key=key) == [
+        '6d3',
+        '6d39',
+        '6d3c',
+        '6d38b',
+        '6d38c',
+        '6d38ac',
+        '6d38af',
+        '6d38ae1',
+        '6d38ae4',
+        '6d38ae09',
+        '6d38ae0b',
+        '6d38ae0c',
+        '6d38ae0d',
+        '$6d38ae0d',
+        '6d38ae0f',
+        '6d38ae093',
+        '6d38ae094',
+        '6d38ae095',
+        '6d38ae0b4',
+        '6d38ae0b5',
+        '6d38ae0b7',
+        '6d38ae0bc',
+        '$6d38ae0bc',
+        '6d38ae0e4',
+        '$6d38ae0e4',
+        '6d38ae0ec',
+        '$6d38ae0ec',
+    ]
+
+
+@pytest.mark.skipif(is_windows, reason=SKIP_REASON)
 def test_index_points_all(data_archive, cli_runner):
     # Indexing --all should give the same results every time.
     # For points, every point should have only one long S2 cell token.
