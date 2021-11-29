@@ -101,6 +101,23 @@ def test_index_polygons_all(data_archive, cli_runner):
         assert stats.distinct_s2_tokens == 3812 if is_linux else 3802
 
 
+def test_reprojection(data_archive_readonly, cli_runner):
+    # Reprojections are working differently on different platforms.
+
+    with data_archive_readonly("polygons.tgz") as _:
+        cmd = ["show", "-o", "json"]
+        r = cli_runner.invoke(cmd)
+        assert r.exit_code == 0, r.stderr
+        unprojected = r.stdout
+
+        cmd.append("--crs=EPSG:4326")
+        r = cli_runner.invoke(cmd)
+        assert r.exit_code == 0, r.stderr
+        projected = r.stdout
+
+        assert projected == unprojected
+
+
 @pytest.mark.skipif(is_windows, reason=SKIP_REASON)
 def test_index_table_all(data_archive, cli_runner):
     with data_archive("table.tgz") as repo_path:
