@@ -416,7 +416,9 @@ def update_spatial_tree(repo, commits, verbosity=1, clear_existing=False):
             if geom is None:
                 continue
             try:
-                s2_tokens = get_s2_tokens(s2_indexer, geom, transforms)
+                s2_tokens = get_s2_tokens(
+                    s2_indexer, geom, transforms, output=feature_oid
+                )
             except Exception as e:
                 L.warning(f"Couldn't generate S2 index for {feature_oid}:\n{e}")
                 continue
@@ -474,13 +476,13 @@ def _find_geometry_column(fields):
     return result
 
 
-def get_s2_tokens(s2_indexer, geom, transforms):
+def get_s2_tokens(s2_indexer, geom, transforms, output=None):
     is_point = geom.geometry_type == GeometryType.POINT
 
     return (
         _point_s2_tokens(s2_indexer, geom, transforms)
         if is_point
-        else _general_s2_tokens(s2_indexer, geom, transforms)
+        else _general_s2_tokens(s2_indexer, geom, transforms, output=output)
     )
 
 
@@ -509,7 +511,7 @@ def _point_s2_tokens(s2_indexer, geom, transforms):
     return result
 
 
-def _general_s2_tokens(s2_indexer, geom, transforms):
+def _general_s2_tokens(s2_indexer, geom, transforms, output=None):
     import s2_py as s2
 
     e = geom_envelope(geom)
@@ -522,12 +524,16 @@ def _general_s2_tokens(s2_indexer, geom, transforms):
     result = set()
     for transform in transforms:
         s2_ll = []
+        both_p_dest = []
         for p_src in (sw_src, ne_src):
             g = ogr.Geometry(ogr.wkbPoint)
             g.AddPoint(*p_src)
             _apply_transform(g, transform, overwrite_original=True)
             p_dest = g.GetPoint()[:2]
+            both_p_dest.extend(p_dest)
             s2_ll.append(s2.S2LatLng.FromDegrees(p_dest[1], p_dest[0]).Normalized())
+        if output is not None:
+            click.echo(f"{output}: {both_p_dest}")
 
         s2_llrect = s2.S2LatLngRect.FromPointPair(*s2_ll)
         query_terms = s2_indexer.GetIndexTerms(s2_llrect, "")
