@@ -702,3 +702,62 @@ def index(ctx, clear_existing, dry_run, commits, rtree):
         clear_existing=clear_existing,
         dry_run=dry_run,
     )
+
+
+@spatial_tree.command()
+@click.argument(
+    "envelope",
+    nargs=1,
+)
+@click.pass_context
+def query(ctx, envelope):
+    """
+    ENVELOPE is <lon_w>,<lat_s>,<lon_e>,<lat_n>
+    """
+    import s2_py as s2
+
+    repo = ctx.obj.get_repo(allowed_states=KartRepoState.ALL_STATES)
+
+    envelope = envelope.split(",")
+    assert len(envelope) == 4
+    envelope = [float(e) for e in envelope]
+    w, s, e, n = envelope
+    commits = _resolve_all_commit_refs(repo)
+    feature_oid_iter = iter_feature_oids(repo, start_commits=commits, stop_commits=[])
+
+    db_path = repo.gitdir_file(KartRepoFiles.S2_INDEX)
+
+    engine = sqlite_engine(db_path)
+    with sessionmaker(bind=engine)() as sess:
+        s2_indexer = _create_indexer_from_parameters(sess)
+
+    s2_ll = []
+    s2_ll.append(s2.S2LatLng.FromDegrees(s, w).Normalized())
+    s2_ll.append(s2.S2LatLng.FromDegrees(n, e).Normalized())
+
+    s2_llrect = s2.S2LatLngRect.FromPointPair(*s2_ll)
+    query_terms = s2_indexer.GetQueryTerms(s2_llrect, "")
+    click.echo(query_terms, err=True)
+
+    db = sqlite.connect(f"file:{db_path}", uri=True)
+    with db:
+        dbcur = db.cursor()
+        dbcur.execute("PRAGMA temp_store=MEMORY;")
+        dbcur.execute("CREATE TEMP TABLE _query_tokens (s2_token TEXT PRIMARY KEY);")
+        params = [(q,) for q in query_terms]
+        dbcur.executemany("INSERT INTO _query_tokens VALUES (?);", params)
+
+        query = """
+            SELECT EXISTS(
+                SELECT 1 FROM blobs
+                INNER JOIN blob_tokens ON (blobs.rowid=blob_tokens.blob_rowid)
+                INNER JOIN _query_tokens ON (blob_tokens.s2_token=_query_tokens.s2_token)
+                WHERE blobs.blob_id=?
+            );
+        """
+
+        for i, (ds_path, feature_oid) in enumerate(feature_oid_iter):
+            params = (bytes.fromhex(feature_oid),)
+            dbcur.execute(query, params)
+            result = bool(dbcur.fetchone()[0])
+            click.echo(f"{feature_oid} {result}")
