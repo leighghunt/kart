@@ -38,7 +38,7 @@ S2_PARAMETERS = {
 }
 
 # But this value can be changed at any time.
-S2_MAX_CELLS_INDEX = 8
+S2_MAX_CELLS_INDEX = 2
 
 
 def _revlist_command(repo):
@@ -53,7 +53,7 @@ def _revlist_command(repo):
     ]
 
 
-DS_PATH_PATTERN = r'(.+)/\.(sno|table)-dataset/'
+DS_PATH_PATTERN = r"(.+)/\.(sno|table)-dataset/"
 
 
 def _parse_revlist_output(line_iter, rel_path_pattern):
