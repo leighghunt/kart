@@ -351,7 +351,7 @@ def _format_commits(repo, commit_ids):
     return " ".join(c[:length] for c in commit_ids)
 
 
-def update_spatial_tree(
+def update_spatial_tree_s2(
     repo, commits, verbosity=1, clear_existing=False, dry_run=False
 ):
     """
@@ -451,6 +451,79 @@ def update_spatial_tree(
         params = [(bytes.fromhex(commit_id),) for commit_id in all_independent_commits]
         dbcur.execute("DELETE FROM commits;")
         dbcur.executemany("INSERT INTO commits (commit_id) VALUES (?);", params)
+
+    t1 = time.monotonic()
+    click.echo(f"Indexed {i} features in {t1-t0:.1f}s")
+
+
+def update_spatial_tree_rtree(
+    repo, commits, verbosity=1, clear_existing=False, dry_run=False
+):
+    """
+    Index the commits given in commit_spec, and write them to the s2_index.db repo file.
+
+    repo - the Kart repo containing the commits to index, and in which to write the index file.
+    commits - a set of commit IDs to index (ancestors of these are implicitly included).
+    verbosity - how much non-essential information to output.
+    clear_existing - when true, deletes any pre-existing data before re-indexing.
+    """
+    crs_helper = CrsHelper(repo)
+
+    rtree_path = repo.gitdir_file("rtree")
+    stop_commits = set()
+    all_independent_commits = _minimal_description_of_commit_set(repo, commits)
+    start_commits = all_independent_commits - stop_commits
+
+    if not start_commits:
+        click.echo("Nothing to do: index already up to date.")
+        return
+
+    feature_oid_iter = iter_feature_oids(repo, start_commits, stop_commits)
+
+    progress_every = None
+    if verbosity >= 1:
+        progress_every = max(100, 100_000 // (10 ** (verbosity - 1)))
+
+    # We index from the most recent commits, and stop at the already-indexed ancestors -
+    # but in terms of logging it makes more sense to say: indexing from <ANCESTORS> to <CURRENT>.
+    ancestor_desc = _format_commits(repo, stop_commits)
+    current_desc = _format_commits(repo, start_commits)
+    if not ancestor_desc:
+        click.echo(f"Indexing from the very start up to {current_desc} ...")
+    else:
+        click.echo(f"Indexing from {ancestor_desc} up to {current_desc} ...")
+
+    if dry_run:
+        click.echo("(Not performing the indexing due to --dry-run.")
+        sys.exit(0)
+
+    t0 = time.monotonic()
+    i = 0
+
+    # Using sqlite directly here instead of sqlalchemy is about 10x faster.
+    # Possibly due to huge number of unbatched queries.
+    # TODO - investigate further.
+    import rtree
+
+    rt = rtree.Rtree(str(rtree_path), pagesize=6144)
+    if True:
+        for i, (ds_path, feature_oid) in enumerate(feature_oid_iter):
+            if i and progress_every and i % progress_every == 0:
+                click.echo(f"  {i:,d} features... @{time.monotonic()-t0:.1f}s")
+
+            transforms = crs_helper.transforms_for_dataset(ds_path)
+            if not transforms:
+                continue
+            geom = get_geometry(repo, feature_oid)
+            if geom is None:
+                continue
+
+            feature_oid_as_int = int(feature_oid, 16)
+            w, e, s, n = geom.envelope(only_2d=True, calculate_if_missing=True)
+            rt.add(
+                feature_oid_as_int,
+                (w, s, e, n),
+            )
 
     t1 = time.monotonic()
     click.echo(f"Indexed {i} features in {t1-t0:.1f}s")
@@ -596,12 +669,18 @@ def spatial_tree(ctx, **kwargs):
     default=False,
     help="Don't do any indexing, instead just output what would be indexed.",
 )
+@click.option(
+    "--rtree",
+    is_flag=True,
+    default=False,
+    help="Create an rtree instead of an s2 index",
+)
 @click.argument(
     "commits",
     nargs=-1,
 )
 @click.pass_context
-def index(ctx, clear_existing, dry_run, commits):
+def index(ctx, clear_existing, dry_run, commits, rtree):
     """
     Indexes all features added by the supplied commits and their ancestors.
     If no commits are supplied, indexes all features in all commits.
@@ -612,7 +691,11 @@ def index(ctx, clear_existing, dry_run, commits):
     else:
         commits = _resolve_commits(repo, commits)
 
-    update_spatial_tree(
+    if rtree:
+        func = update_spatial_tree_rtree
+    else:
+        func = update_spatial_tree_s2
+    func(
         repo,
         commits,
         verbosity=ctx.obj.verbosity + 1,
