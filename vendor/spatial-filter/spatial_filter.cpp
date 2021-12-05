@@ -22,10 +22,7 @@ using std::vector;
 
 namespace {
 
-static const string INDEX_FILENAME = "s2_index.db";
-
-// This value can be tweaked at any time without changing the index.
-static const int S2_MAX_CELLS_QUERY = 25;
+static const string INDEX_FILENAME = "feature_envelopes.db";
 
 static const int OBJ_COMMIT = 1;
 static const int OBJ_TREE = 2;
@@ -38,11 +35,36 @@ enum match_result {
     MR_ERROR,
 };
 
+struct filter_context {
+    int count = 0;
+    int match_count = 0;
+    uint64_t started_at = 0;
+    sqlite3 *db = nullptr;
+    sqlite3_stmt* lookup_stmt = nullptr;
+    double w = 0, s = 0, e = 0, n = 0;
+};
+
+bool range_overlaps(double a1, double a2, double b1, double b2) {
+    if (a1 > a2 || b1 > b2) {
+        std::cerr << "Ranges don't make sense: " << a1 << " " << a2 << " " << b1 << " " << b2 << "\n";
+        abort();
+    }
+    if (b1 < a1) {
+        // `b` starts to the left of `a`, so they intersect if `b` finishes to the right of where `a` starts.
+        return b2 > a1;
+    }
+    if (a1 < b1) {
+        // `a` starts to the left of `b`, so they intersect if `a` finishes to the right of where `b` starts.
+        return a2 > b1;
+    }
+    // They both have the same left edge, so they must intersect unless one of them is zero-width.
+    return b2 != b1 && a2 != a1;
+}
+
 // Core function - decides whether a blob matches or not.
 
 enum match_result sf_filter_blob(
-    sqlite3 *db,
-    sqlite3_stmt *stmt,
+    struct filter_context *ctx,
     const struct repository* repo,
     const struct object_id *oid,
     const string &path)
@@ -53,6 +75,9 @@ enum match_result sf_filter_blob(
         return MR_MATCH;
     }
 
+    sqlite3 *db = ctx->db;
+    sqlite3_stmt *stmt = ctx->lookup_stmt;
+
     int sql_err = sqlite3_bind_blob(stmt, 1, sf_oid2hash(oid), sf_repo2hashsz(repo), SQLITE_TRANSIENT);
     if (sql_err) {
         std::cerr << "\nspatial-filter: Error: preparing lookup (" << sql_err << " @0): " << sqlite3_errmsg(db) << "\n";
@@ -60,29 +85,31 @@ enum match_result sf_filter_blob(
     }
 
     sql_err = sqlite3_step(stmt);
+    if (sql_err == SQLITE_DONE) {
+        sqlite3_reset(stmt);
+        return MR_MATCH;
+    }
     if (sql_err != SQLITE_ROW) {
         std::cerr << "\nspatial-filter: Error: querying (" << sql_err << "): " << sqlite3_errmsg(db) << "\n";
         sqlite3_reset(stmt);
         return MR_ERROR;
     }
 
-    const int is_found = sqlite3_column_int(stmt, 0);
+    const double w = sqlite3_column_double(stmt, 0);
+    const double s = sqlite3_column_double(stmt, 1);
+    const double e = sqlite3_column_double(stmt, 2);
+    const double n = sqlite3_column_double(stmt, 3);
+
+    bool overlaps = range_overlaps(w, e, ctx->w, ctx->e) && range_overlaps(s, n, ctx->s, ctx->n);
+
     sqlite3_reset(stmt);
 
-    return is_found ? MR_MATCH : MR_NOT_MATCHED;
+    return overlaps ? MR_MATCH : MR_NOT_MATCHED;
 }
 
 //
 // Filter extension interface:
 //
-
-struct filter_context {
-    int count = 0;
-    int match_count = 0;
-    uint64_t started_at = 0;
-    sqlite3 *db = nullptr;
-    sqlite3_stmt* lookup_stmt = nullptr;
-};
 
 int sf_init(
     const struct repository *r,
@@ -103,19 +130,6 @@ int sf_init(
         std::cerr << "spatial-filter: Error: invalid bounds, expected '<lng_w>,<lat_s>,<lng_e>,<lat_n>'\n";
         return 2;
     }
-    S2LatLng sw = S2LatLng::FromDegrees(rect[1], rect[0]);
-    S2LatLng ne = S2LatLng::FromDegrees(rect[3], rect[2]);
-
-    if (!sw.is_valid() || !ne.is_valid()) {
-        std::cerr << "spatial-filter: Error: invalid LatLng values, expected '<lng_w>,<lat_s>,<lng_e>,<lat_n>'\n";
-        return 2;
-    }
-    sw = sw.Normalized();
-    ne = ne.Normalized();
-
-    sf_trace_printf("SW=%s NE=%s\n", sw.ToStringInDegrees().c_str(), ne.ToStringInDegrees().c_str());
-
-    S2LatLngRect s2_rect = S2LatLngRect::FromPointPair(sw, ne);
 
     std::ostringstream ss_db(sf_repo2gitdir(r), std::ios_base::ate);
     ss_db << "/" << INDEX_FILENAME;
@@ -124,6 +138,10 @@ int sf_init(
 
     struct filter_context *ctx = new filter_context();
     (*context) = ctx;
+    ctx->w = rect[0];
+    ctx->s = rect[1];
+    ctx->e = rect[2];
+    ctx->n = rect[3];
 
     if (sqlite3_open_v2(ss_db.str().c_str(), &ctx->db, SQLITE_OPEN_READONLY, NULL)) {
         std::cerr << "spatial-filter: Warning: not available for this repository - no objects will be omitted.\n";
@@ -135,86 +153,8 @@ int sf_init(
     int sql_err;
     sqlite3_stmt *stmt;
 
-    // Look up the parameters used to generate the index
-    const string parameters_sql("SELECT min_level, max_level, level_mod FROM parameters;");
-    sql_err = sqlite3_prepare_v2(ctx->db, parameters_sql.c_str(), -1, &stmt, NULL);
-
-    if (sql_err) {
-        std::cerr << "spatial-filter: Error: reading parameters (1." << sql_err << "): " << sqlite3_errmsg(ctx->db) << "\n";
-        return 1;
-    }
-
-    sql_err = sqlite3_step(stmt);
-    if (sql_err != SQLITE_ROW) {
-        std::cerr << "spatial-filter: Error: reading parameters (2." << sql_err << "): " << sqlite3_errmsg(ctx->db) << "\n";
-        sqlite3_finalize(stmt);
-        return 1;
-    }
-    int min_level = sqlite3_column_int(stmt, 0);
-    int max_level = sqlite3_column_int(stmt, 1);
-    int level_mod = sqlite3_column_int(stmt, 2);
-    sqlite3_finalize(stmt);
-
-    sf_trace_printf("Index parameters: min_level=%d max_level=%d level_mod=%d\n", min_level, max_level, level_mod);
-
-    // Prepare the query terms.
-    S2RegionTermIndexer::Options indexer_options;
-    indexer_options.set_min_level(min_level);
-    indexer_options.set_max_level(max_level);
-    indexer_options.set_level_mod(level_mod);
-    indexer_options.set_max_cells(S2_MAX_CELLS_QUERY);
-
-    S2RegionTermIndexer indexer(indexer_options);
-
-    const vector<string> query_terms = indexer.GetQueryTerms(s2_rect, "");
-
-    std::ostringstream all_query_terms;
-    std::copy(query_terms.begin(), query_terms.end(), std::ostream_iterator<string>(all_query_terms, ", "));
-    sf_trace_printf(" Query terms: %s\n", all_query_terms.str().c_str());
-
-
-    // Create and populate a temporary in-memory table with the query terms.
-    sql_err = sqlite3_exec(ctx->db,
-                           "PRAGMA temp_store=MEMORY;"
-                           "CREATE TEMP TABLE _query_tokens (s2_token TEXT PRIMARY KEY);",
-                           NULL, NULL, NULL);
-    if (sql_err) {
-        std::cerr << "spatial-filter: Error: preparing query-tokens (3." << sql_err << "): " << sqlite3_errmsg(ctx->db) << "\n";
-        return 1;
-    }
-
-    sql_err = sqlite3_prepare_v2(ctx->db,
-                                 "INSERT INTO _query_tokens VALUES (?);",
-                                 -1, &stmt, NULL);
-    if (sql_err) {
-        std::cerr << "spatial-filter: Error: preparing query-tokens (4." << sql_err << "): " << sqlite3_errmsg(ctx->db) << "\n";
-        return 1;
-    }
-    for (auto t: query_terms) {
-        sql_err = sqlite3_bind_text(stmt, 1, t.c_str(), -1, SQLITE_TRANSIENT);
-        if (sql_err) {
-            std::cerr << "\nspatial-filter: Error: preparing query-tokens (5." << sql_err << "): " << sqlite3_errmsg(ctx->db) << "\n";
-            sqlite3_finalize(stmt);
-            return 1;
-        }
-
-        sql_err = sqlite3_step(stmt);
-        if (sql_err != SQLITE_DONE) {
-            std::cerr << "\nspatial-filter: Error: populating query-tokens (6." << sql_err << "): " << sqlite3_errmsg(ctx->db) << "\n";
-            sqlite3_finalize(stmt);
-            return 1;
-        }
-        sqlite3_reset(stmt);
-    }
-    sqlite3_finalize(stmt);
-
     // prepare the lookup db query
-    const string query_sql("SELECT EXISTS("
-                          "SELECT 1 "
-                          "FROM blobs "
-                          "INNER JOIN blob_tokens ON (blobs.rowid=blob_tokens.blob_rowid) "
-                          "INNER JOIN _query_tokens ON (blob_tokens.s2_token=_query_tokens.s2_token) "
-                          "WHERE blobs.blob_id=?);");
+    const string query_sql("SELECT w, s, e, n FROM blobs WHERE blobs.blob_id=?;");
     sql_err = sqlite3_prepare_v3(ctx->db,
                                  query_sql.c_str(),
                                  static_cast<int>(query_sql.size()+1),
@@ -222,7 +162,7 @@ int sf_init(
                                  &ctx->lookup_stmt,
                                  NULL);
     if (sql_err) {
-        std::cerr << "spatial-filter: Error: preparing lookup (7." << sql_err << ")" << sqlite3_errmsg(ctx->db) << "\n";
+        std::cerr << "spatial-filter: Error: preparing lookup (" << sql_err << ") " << sqlite3_errmsg(ctx->db) << "\n";
         return 1;
     }
 
@@ -283,7 +223,7 @@ enum list_objects_filter_result sf_filter_object(
                 return LOFR_MARK_SEEN_AND_DO_SHOW;
             }
 
-            switch(sf_filter_blob(ctx->db, ctx->lookup_stmt, repo, sf_obj2oid(obj), pathname)) {
+            switch(sf_filter_blob(ctx, repo, sf_obj2oid(obj), pathname)) {
                 case MR_ERROR:
                     abort();
 

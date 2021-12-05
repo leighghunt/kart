@@ -8,9 +8,9 @@ import time
 import click
 from osgeo import osr, ogr
 from pysqlite3 import dbapi2 as sqlite
-from sqlalchemy import Column, ForeignKey, Integer, Table, Text
+from sqlalchemy import Column, Table
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.types import BLOB
+from sqlalchemy.types import BLOB, REAL
 
 
 from .cli_util import add_help_subcommand, tool_environment
@@ -170,16 +170,6 @@ class SpatialTreeTables(TableSet):
     def __init__(self):
         super().__init__()
 
-        # "parameters" records the parameters used to create this index. The same parameters must be used
-        # when updating the index and when querying the index - it won't work if not kept consistent.
-        self.parameters = Table(
-            "parameters",
-            self.sqlalchemy_metadata,
-            Column("min_level", Integer, nullable=False),
-            Column("max_level", Integer, nullable=False),
-            Column("level_mod", Integer, nullable=False),
-        )
-
         # "commits" tracks all the commits we have indexed.
         # A commit is only considered indexed if ALL of its ancestors are also indexed - this means
         # relatively few commits need to be recorded as being indexed in this table.
@@ -195,43 +185,13 @@ class SpatialTreeTables(TableSet):
         self.blobs = Table(
             "blobs",
             self.sqlalchemy_metadata,
-            # From a user-perspective, "rowid" isjust an arbitrary integer primary key.
-            # In more detail: This column aliases to the sqlite rowid of the table.
-            # See https://www.sqlite.org/lang_createtable.html#rowid
-            # Using the rowid directly as a foreign key (see "blob_tokens") means faster joins.
-            # The rowid can be used without creating a column that aliases to it, but you shouldn't -
-            # rowids might change if they are not aliased. See https://sqlite.org/lang_vacuum.html)
-            Column("rowid", Integer, nullable=False, primary_key=True),
             # "blob_id" is the git object ID (the SHA-1 hash) of a feature, in binary (20 bytes).
             # Is equivalent to 40 chars of hex eg: d08c3dd220eea08d8dfd6d4adb84f9936c541d7a
-            Column("blob_id", BLOB, nullable=False, unique=True),
-            sqlite_autoincrement=True,
-        )
-
-        # "blob_tokens" associates 0 or more S2 cell tokens with each feature that we have indexed.
-        # Technically these are "index terms" not S2 cell tokens since they are slightly more complicated
-        # - there are two types of term, ANCESTOR and COVERING. COVERING terms start with a "$" prefix.
-        # For more details on how indexing works, consult the S2RegionTermIndexer documentation.
-        self.blob_tokens = Table(
-            "blob_tokens",
-            self.sqlalchemy_metadata,
-            # Reference to blobs.rowid.
-            Column(
-                "blob_rowid",
-                Integer,
-                ForeignKey("blobs.rowid"),
-                nullable=False,
-                primary_key=True,
-            ),
-            # S2 index term eg "6d6dd90351b31cbf" or "$6e1".
-            # To locate an S2 cell by token, see https://s2.sidewalklabs.com/regioncoverer/
-            # (and remove any $ prefix from these index terms so that they are simply S2 cell tokens).
-            Column(
-                "s2_token",
-                Text,
-                nullable=False,
-                primary_key=True,
-            ),
+            Column("blob_id", BLOB, nullable=False, primary_key=True),
+            Column("w", REAL, nullable=False),
+            Column("s", REAL, nullable=False),
+            Column("e", REAL, nullable=False),
+            Column("n", REAL, nullable=False),
         )
 
 
@@ -239,9 +199,7 @@ SpatialTreeTables.copy_tables_to_class()
 
 
 def drop_tables(sess):
-    sess.execute("DROP TABLE IF EXISTS parameters;")
     sess.execute("DROP TABLE IF EXISTS commits;")
-    sess.execute("DROP TABLE IF EXISTS blob_tokens;")
     sess.execute("DROP TABLE IF EXISTS blobs;")
 
 
@@ -318,39 +276,6 @@ def _build_on_last_index(repo, start_commits, engine, clear_existing=False):
     return (start_commits, stop_commits, all_independent_commits)
 
 
-def _create_indexer_from_parameters(sess):
-    """
-    Return an S2RegionTermIndexer configured according to the parameters table.
-    Storing these parameters in a table means we can change them if needed without breaking Kart.
-    """
-
-    import s2_py as s2
-
-    parameters_count = sess.scalar("SELECT COUNT(*) FROM parameters;")
-    assert parameters_count <= 1
-    if not parameters_count:
-        sess.execute(
-            """
-            INSERT INTO parameters (min_level, max_level, level_mod)
-            VALUES (:min_level, :max_level, :level_mod);
-            """,
-            S2_PARAMETERS,
-        )
-
-    row = sess.execute(
-        "SELECT min_level, max_level, level_mod FROM parameters;"
-    ).fetchone()
-    assert row is not None
-    min_level, max_level, level_mod = row
-
-    s2_indexer = s2.S2RegionTermIndexer()
-    s2_indexer.set_min_level(min_level)
-    s2_indexer.set_max_level(max_level)
-    s2_indexer.set_level_mod(level_mod)
-    s2_indexer.set_max_cells(S2_MAX_CELLS_INDEX)
-    return s2_indexer
-
-
 def _format_commits(repo, commit_ids):
     if not commit_ids:
         return None
@@ -371,7 +296,7 @@ def update_spatial_tree(
     """
     crs_helper = CrsHelper(repo)
 
-    db_path = repo.gitdir_file(KartRepoFiles.S2_INDEX)
+    db_path = repo.gitdir_file("feature_envelopes.db")
     engine = sqlite_engine(db_path)
 
     # Find out where we were up to last time, don't reindex anything that's already indexed.
@@ -394,7 +319,6 @@ def update_spatial_tree(
             drop_tables(sess)
 
         SpatialTreeTables.create_all(sess)
-        s2_indexer = _create_indexer_from_parameters(sess)
 
     # We index from the most recent commits, and stop at the already-indexed ancestors -
     # but in terms of logging it makes more sense to say: indexing from <ANCESTORS> to <CURRENT>.
@@ -426,31 +350,29 @@ def update_spatial_tree(
             transforms = crs_helper.transforms_for_dataset(ds_path)
             if not transforms:
                 continue
+            other_transforms = transforms[1:]
             geom = get_geometry(repo, feature_oid)
             if geom is None:
                 continue
-            try:
-                s2_tokens = get_s2_tokens(s2_indexer, geom, transforms)
-            except Exception as e:
-                L.warning(f"Couldn't generate S2 index for {feature_oid}:\n{e}")
-                continue
+            w, e, s, n = geom.envelope(only_2d=True, calculate_if_missing=True)
+            assert w <= e
+            assert s <= n
+            w2, s2 = _apply_transform_to_point(w, s, transforms[0])
+            e2, n2 = _apply_transform_to_point(e, n, transforms[0])
+            w3, e3 = min(w2, e2), max(w2, e2)
+            s3, n3 = min(s2, n2), max(s2, n2)
+            for transform in other_transforms:
+                w2, s2 = _apply_transform_to_point(w, s, transform)
+                e2, n2 = _apply_transform_to_point(e, n, transform)
+                w3, e3 = min(w3, w2, e2), max(e3, w2, e2)
+                s3, n3 = min(s3, s2, n2), max(s3, s2, n2)
 
-            params = (bytes.fromhex(feature_oid),)
-            row = dbcur.execute(
-                "SELECT rowid FROM blobs WHERE blob_id = ?;", params
-            ).fetchone()
-            if row:
-                rowid = row[0]
-            else:
-                dbcur.execute("INSERT INTO blobs (blob_id) VALUES (?);", params)
-                rowid = dbcur.lastrowid
+            assert w3 <= e3
+            assert s3 <= n3
 
-            if not s2_tokens:
-                continue
-
-            params = [(rowid, token) for token in s2_tokens]
-            dbcur.executemany(
-                "INSERT OR IGNORE INTO blob_tokens (blob_rowid, s2_token) VALUES (?, ?);",
+            params = (bytes.fromhex(feature_oid), w3, s3, e3, n3)
+            dbcur.execute(
+                "INSERT INTO blobs (blob_id, w, s, e, n) VALUES (?, ?, ?, ?, ?);",
                 params,
             )
 
@@ -488,16 +410,6 @@ def _find_geometry_column(fields):
     return result
 
 
-def get_s2_tokens(s2_indexer, geom, transforms):
-    is_point = geom.geometry_type == GeometryType.POINT
-
-    return (
-        _point_s2_tokens(s2_indexer, geom, transforms)
-        if is_point
-        else _general_s2_tokens(s2_indexer, geom, transforms)
-    )
-
-
 def _apply_transform(original, transform, overwrite_original=False):
     if transform is None:
         return original
@@ -506,7 +418,14 @@ def _apply_transform(original, transform, overwrite_original=False):
     return result
 
 
-def _point_s2_tokens(s2_indexer, geom, transforms):
+def _apply_transform_to_point(x, y, transform):
+    g = ogr.Geometry(ogr.wkbPoint)
+    g.AddPoint(x, y)
+    _apply_transform(g, transform, overwrite_original=True)
+    return g.GetPoint()[:2]
+
+
+def _point_envelope(s2_indexer, geom, transforms):
     import s2_py as s2
 
     g = gpkg_geom_to_ogr(geom)
