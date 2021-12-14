@@ -103,7 +103,7 @@ pyi_analysis = Analysis(
         # via a cython module ???
         'csv',
         *collect_submodules('kart'),
-        *collect_submodules('sqlalchemy'),
+        *collect_submodules('sqlalchemy', filter=lambda name: 'testing' not in name),
     ],
     hookspath=[
         'platforms/pyi-hooks',
